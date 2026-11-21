@@ -1,6 +1,6 @@
 {
   "name": "VideoDownloader2.3",
-  "description": "Rust alapú videó- és zeneletöltő alkalmazás yt-dlp motorral, letöltéskezelővel, vágólap-támogatással, világos/sötét móddal és automatikus yt-dlp verzióellenőrzéssel.",
+  "description": "Rust alapú videó- és zeneletöltő, többplatformos kereső és natív Chromecast / Android TV Cast alkalmazás yt-dlp és ffmpeg motorral, letöltéskezelővel, vágólap-támogatással és világos/sötét móddal.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

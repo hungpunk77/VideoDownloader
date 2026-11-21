@@ -2,8 +2,8 @@ use crate::config;
 use crate::engines;
 use crate::types::{
     build_album_relative_path, clean_artist_name, is_bandcamp_url, is_yt_music_url,
-    strip_leading_artist_from_album, DownloadItem, DownloadRequest, MediaInfo, PlaylistEntry,
-    SearchBatch,
+    strip_leading_artist_from_album, CastDevice, CastSessionState, DownloadItem, DownloadRequest,
+    MediaInfo, PlaylistEntry, SearchBatch,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -31,6 +31,10 @@ pub enum UiEvent {
     DownloadUpdated(DownloadItem),
     ThumbnailLoaded(String, Vec<u8>),
     ThumbnailFailed(String),
+    CastDevicesUpdated(Vec<CastDevice>),
+    CastDiscoveryDone(Option<String>),
+    CastStateUpdated(u64, Option<CastSessionState>),
+    CastError(u64, String),
 }
 
 pub struct DownloadManager {
@@ -71,7 +75,7 @@ impl DownloadManager {
     }
 }
 
-fn append_cookie_args(args: &mut Vec<String>) {
+pub fn append_cookie_args(args: &mut Vec<String>) {
     let cookies_path = config::cookies_file_path();
     if cookies_path.exists() {
         args.push("--cookies".to_string());
@@ -97,7 +101,7 @@ const CP1250_HIGH: [char; 128] = [
     'đ', 'ń', 'ň', 'ó', 'ô', 'ő', 'ö', '÷', 'ř', 'ů', 'ú', 'ű', 'ü', 'ý', 'ţ', '˙',
 ];
 
-fn decode_ytdlp_bytes(bytes: &[u8]) -> String {
+pub fn decode_ytdlp_bytes(bytes: &[u8]) -> String {
     if let Ok(s) = std::str::from_utf8(bytes) {
         return s.to_string();
     }
@@ -120,7 +124,7 @@ fn decode_ytdlp_bytes(bytes: &[u8]) -> String {
     }
 }
 
-fn format_ytdlp_error(raw: &str) -> String {
+pub fn format_ytdlp_error(raw: &str) -> String {
     if raw.contains("Sign in to confirm") || raw.contains("not a bot") {
         return "[BOT_CHECK] YouTube requested bot verification.".to_string();
     }

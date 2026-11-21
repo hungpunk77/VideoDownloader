@@ -197,6 +197,24 @@ pub struct Strings {
 
     pub err_bot_check: &'static str,
     pub err_no_browser_db: &'static str,
+
+    pub cast_button: &'static str,
+    pub cast_modal_title: &'static str,
+    pub cast_scan_btn: &'static str,
+    pub cast_scanning: &'static str,
+    pub cast_no_devices: &'static str,
+    pub cast_manual_ip: &'static str,
+    pub cast_connect_btn: &'static str,
+    pub cast_connecting: &'static str,
+    pub cast_status_connecting: &'static str,
+    pub cast_status_buffering: &'static str,
+    pub cast_status_playing: &'static str,
+    pub cast_status_paused: &'static str,
+    pub cast_status_idle: &'static str,
+    pub cast_pause: &'static str,
+    pub cast_resume: &'static str,
+    pub cast_stop: &'static str,
+    pub cast_close: &'static str,
 }
 
 const EN: Strings = Strings {
@@ -396,6 +414,24 @@ const EN: Strings = Strings {
 
     err_bot_check: "YouTube requested bot verification. Select browser cookies or import cookies.txt in Settings.",
     err_no_browser_db: "Selected browser cookie database not found. Set browser cookies to None or import cookies.txt.",
+
+    cast_button: "Cast",
+    cast_modal_title: "Cast to Android TV / Chromecast",
+    cast_scan_btn: "Scan devices",
+    cast_scanning: "Scanning local network for Android TV / Chromecast...",
+    cast_no_devices: "No Cast devices found yet. Make sure your TV and PC are on the same Wi-Fi/LAN.",
+    cast_manual_ip: "Or enter device IP manually:",
+    cast_connect_btn: "Cast to TV",
+    cast_connecting: "Preparing media stream & connecting to TV...",
+    cast_status_connecting: "Connecting...",
+    cast_status_buffering: "Buffering...",
+    cast_status_playing: "Playing",
+    cast_status_paused: "Paused",
+    cast_status_idle: "Ready",
+    cast_pause: "Pause",
+    cast_resume: "Play",
+    cast_stop: "Stop Cast",
+    cast_close: "Close",
 };
 
 const DE: Strings = Strings {
@@ -595,6 +631,24 @@ const DE: Strings = Strings {
 
     err_bot_check: "YouTube verlangt eine Bot-Bestätigung. Browser-Cookies oder cookies.txt in den Einstellungen konfigurieren.",
     err_no_browser_db: "Browser-Cookie-Datenbank nicht gefunden. Auf 'Keine' setzen oder cookies.txt importieren.",
+
+    cast_button: "Cast",
+    cast_modal_title: "Auf Android TV / Chromecast streamen",
+    cast_scan_btn: "Geräte suchen",
+    cast_scanning: "Suche im lokalen Netzwerk nach Android TV / Chromecast...",
+    cast_no_devices: "Noch keine Cast-Geräte gefunden. TV und PC müssen im selben Netzwerk sein.",
+    cast_manual_ip: "Oder Geräte-IP manuell eingeben:",
+    cast_connect_btn: "An TV senden",
+    cast_connecting: "Bereite Stream vor & verbinde mit TV...",
+    cast_status_connecting: "Verbinde...",
+    cast_status_buffering: "Puffern...",
+    cast_status_playing: "Wiedergabe",
+    cast_status_paused: "Pausiert",
+    cast_status_idle: "Bereit",
+    cast_pause: "Pause",
+    cast_resume: "Fortsetzen",
+    cast_stop: "Cast beenden",
+    cast_close: "Schließen",
 };
 
 const HU: Strings = Strings {
@@ -794,6 +848,24 @@ const HU: Strings = Strings {
 
     err_bot_check: "A YouTube bot-ellenőrzést kért. Állítson be böngésző sütiket vagy importáljon cookies.txt fájlt a Beállításokban.",
     err_no_browser_db: "A kiválasztott böngésző süti-adatbázisa nem található. Állítsa vissza 'Nincs'-re vagy importáljon cookies.txt fájlt.",
+
+    cast_button: "Cast",
+    cast_modal_title: "Átküldés Android TV-re / Chromecastra",
+    cast_scan_btn: "Eszközök keresése",
+    cast_scanning: "Chromecast / Android TV keresése a helyi hálózaton...",
+    cast_no_devices: "Még nem található Cast eszköz. Ellenőrizd, hogy a TV és a gép ugyanazon a hálózaton van-e.",
+    cast_manual_ip: "Vagy add meg kézzel a TV IP-címét:",
+    cast_connect_btn: "Küldés a TV-re",
+    cast_connecting: "Stream előkészítése és csatlakozás a TV-hez...",
+    cast_status_connecting: "Csatlakozás...",
+    cast_status_buffering: "Pufferelés...",
+    cast_status_playing: "Lejátszás",
+    cast_status_paused: "Szüneteltetve",
+    cast_status_idle: "Kész",
+    cast_pause: "Szünet",
+    cast_resume: "Folytatás",
+    cast_stop: "Leállítás",
+    cast_close: "Bezárás",
 };
 
 pub fn strings(lang: AppLanguage) -> &'static Strings {

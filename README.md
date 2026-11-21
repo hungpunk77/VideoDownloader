@@ -1,15 +1,19 @@
 # VideoDownloader 2.3
 
-A fast, lightweight, **100% pure Rust** desktop video, music, and playlist downloader built with **`eframe` / `egui`**, **`tokio`**, **`reqwest`**, **`yt-dlp`**, and **`ffmpeg`**.
+A fast, lightweight, **100% pure Rust** desktop video, music, and playlist downloader & **Chromecast / Android TV caster** built with **`eframe` / `egui`**, **`tokio`**, **`reqwest`**, **`yt-dlp`**, and **`ffmpeg`**.
 
-> Zero Node.js, Electron, or WebKit dependencies are required to compile or run the native desktop executable.
+> Zero Node.js, Electron, WebKit, or external mDNS/Bonjour dependencies are required to compile or run the native desktop executable.
 
 ---
 
 ## Key Features
 
 - **100% Pure Rust Native Application**: Compiles into a single fast native binary (`Cargo.toml` + `src/`) for Linux, Windows, and macOS using `eframe`/`egui` GPU-accelerated rendering and `tokio` async process orchestration.
-- **Unified Main-Menu Multi-Site Search (`v2.3`)**: Type any keywords directly into the main Quick Download input bar and press **Enter** (or click **Search**) to search across **YouTube**, **YouTube Music**, **Bandcamp**, **Dailymotion**, **Videa.hu**, and **ok.ru**, complete with **Video / Album / Song** filters and platform badges.
+- **Native Chromecast & Android TV Casting (Zero Extra Installs)**: Click **📺 Cast** on any search result or inspected link to stream directly to Chromecast or Android TV devices on your local network:
+  - **Built-in Pure-Rust mDNS & CastV2**: Discovers `_googlecast._tcp.local.` devices automatically via `mdns-sd` (plus manual IP fallback) and communicates natively over TLS + CastV2 Protobuf (`rustls` + `ring`) — no Bonjour, Avahi, or external tools required.
+  - **Local LAN HTTP Proxy & Live `ffmpeg` Stream Relay**: Resolves media streams via `yt-dlp`, serves direct streams with HTTP `Range` seeking support, and automatically muxes split HD video/audio streams (e.g., 720p/1080p YouTube) via zero-reencode `ffmpeg` fragmented MP4/MP3 piping.
+  - **Persistent Bottom Player Controls**: Live playback status (`Connecting`, `Buffering`, `Playing`, `Paused`), **Play/Pause**, **interactive Seekbar**, **Volume / Mute**, and **Stop Cast** controls. *(Note: allow local network/LAN traffic in your OS firewall on first use so the TV can reach the local stream relay.)*
+- **Unified Main-Menu Multi-Site Search with Full Pagination (`v2.3`)**: Type any keywords directly into the main Quick Download input bar and press **Enter** (or click **Search**) to search across **YouTube**, **YouTube Music**, **Bandcamp**, **Dailymotion**, **Videa.hu**, and **ok.ru**, complete with **Video / Album / Song** filters, platform badges, full un-capped per-page results, and **Load more** continuation support.
 - **Dedicated YouTube Music & Bandcamp Search + Multi-Select Queue**: Search both **individual songs** and **full albums/EPs** on the Music Search tab (or main search) with album cover thumbnails, checkboxes, and **Ctrl + Left-Click** multi-selection to queue multiple downloads at once. Full playlists and albums are saved into **`<Album Artist>/<Album Title>`** with numbered tracks (`01 - Track Title.ext`), metadata tags, and **one album cover (`cover.jpg`)** per album folder.
 - **Maximum Video Resolution by Default**: Videos default to **Highest available** resolution (`bestvideo+bestaudio/best`), with detected resolutions (`2160p`, `1440p`, `1080p`, `720p`, `480p`, etc.) in `MP4`, `MKV`, or `WEBM`.
 - **Default MP3 (320 kbps) & Source-Aware Format Selection**: Music downloads default to **MP3 (320 kbps)**. After inspecting a link, the format, resolution, and quality selectors automatically display only the options genuinely available for that media (e.g., `FLAC`/`WAV` only appear when lossless streams are offered by the source).

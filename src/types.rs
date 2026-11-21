@@ -272,6 +272,48 @@ pub struct SearchBatch {
     pub pagination: SearchPagination,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CastDevice {
+    pub id: String,
+    pub name: String,
+    pub model: String,
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct CastMediaItem {
+    pub title: String,
+    pub artist: String,
+    pub url: String,
+    pub thumbnail: Option<String>,
+    pub is_audio: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CastPlayerStatus {
+    Connecting,
+    Buffering,
+    Playing,
+    Paused,
+    Idle,
+}
+
+#[derive(Debug, Clone)]
+pub struct CastSessionState {
+    pub device: CastDevice,
+    pub title: String,
+    pub artist: String,
+    pub thumbnail: Option<String>,
+    pub status: CastPlayerStatus,
+    pub is_audio: bool,
+    pub current_time: f64,
+    pub duration: Option<f64>,
+    pub seekable: bool,
+    pub volume: f32,
+    pub muted: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadRequest {

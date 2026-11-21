@@ -1,3 +1,4 @@
+use crate::cast::{self, CastCommand};
 use crate::config;
 use crate::downloader::{self, DownloadManager, UiEvent};
 use crate::engines;
@@ -6,9 +7,10 @@ use crate::search;
 use crate::types::{
     build_album_folder_name, detect_playlist_intent, extract_domain_label, format_duration,
     has_single_video_in_url, is_bandcamp_url, is_yt_music_url, is_youtube_mix_or_radio_url,
-    looks_like_url, strip_youtube_playlist_params, AppLanguage, AppSettings, DownloadItem,
-    DownloadRequest, EngineStatus, MediaInfo, MusicSearchItemKind, MusicSearchResult,
-    MusicSearchSource, SearchPagination, ThemeMode,
+    looks_like_url, strip_youtube_playlist_params, AppLanguage, AppSettings, CastDevice,
+    CastMediaItem, CastPlayerStatus, CastSessionState, DownloadItem, DownloadRequest,
+    EngineStatus, MediaInfo, MusicSearchItemKind, MusicSearchResult, MusicSearchSource,
+    SearchPagination, ThemeMode,
 };
 use eframe::egui;
 use std::collections::{HashMap, HashSet};
@@ -146,6 +148,20 @@ pub struct VideoDownloaderApp {
     pending_font_apply: bool,
     inspect_seq: u64,
     search_seq: u64,
+
+    // Chromecast / Android TV casting
+    cast_devices: Vec<CastDevice>,
+    last_cast_device: Option<CastDevice>,
+    cast_discovering: bool,
+    cast_discovery_error: Option<String>,
+    cast_error: Option<String>,
+    cast_state: Option<CastSessionState>,
+    cast_cmd_tx: Option<mpsc::UnboundedSender<CastCommand>>,
+    cast_pending_item: Option<CastMediaItem>,
+    show_cast_modal: bool,
+    cast_manual_ip: String,
+    cast_seq: u64,
+    cast_seek_drag: Option<f64>,
 }
 
 impl VideoDownloaderApp {
@@ -232,6 +248,18 @@ impl VideoDownloaderApp {
             pending_font_apply: false,
             inspect_seq: 0,
             search_seq: 0,
+            cast_devices: Vec::new(),
+            last_cast_device: None,
+            cast_discovering: false,
+            cast_discovery_error: None,
+            cast_error: None,
+            cast_state: None,
+            cast_cmd_tx: None,
+            cast_pending_item: None,
+            show_cast_modal: false,
+            cast_manual_ip: String::new(),
+            cast_seq: 0,
+            cast_seek_drag: None,
         };
 
         app.startup_engine_check(cc.egui_ctx.clone());
@@ -895,6 +923,62 @@ impl VideoDownloaderApp {
         self.inspect_url(item.url.clone(), ctx);
     }
 
+    fn start_cast_discovery(&mut self, ctx: egui::Context) {
+        if self.cast_discovering {
+            return;
+        }
+        self.cast_discovering = true;
+        self.cast_discovery_error = None;
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            cast::discover_devices(tx, ctx).await;
+        });
+    }
+
+    fn open_cast_picker(&mut self, item: CastMediaItem, ctx: egui::Context) {
+        if let Some(thumb) = item.thumbnail.as_deref() {
+            self.request_thumbnail(thumb, &ctx);
+        }
+        self.cast_pending_item = Some(item);
+        self.show_cast_modal = true;
+        self.cast_error = None;
+        self.start_cast_discovery(ctx);
+    }
+
+    fn start_casting_to_device(
+        &mut self,
+        device: CastDevice,
+        item: CastMediaItem,
+        ctx: egui::Context,
+    ) {
+        if let Some(old_tx) = self.cast_cmd_tx.take() {
+            let _ = old_tx.send(CastCommand::Stop);
+        }
+        self.cast_seq = self.cast_seq.wrapping_add(1);
+        let seq = self.cast_seq;
+        self.last_cast_device = Some(device.clone());
+        self.cast_error = None;
+        self.cast_seek_drag = None;
+        self.show_cast_modal = false;
+        self.cast_pending_item = None;
+
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        self.cast_cmd_tx = Some(cmd_tx);
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            cast::run_cast_session(seq, device, item, cmd_rx, tx, ctx).await;
+        });
+    }
+
+    fn stop_casting(&mut self) {
+        self.cast_seq = self.cast_seq.wrapping_add(1);
+        self.cast_seek_drag = None;
+        if let Some(cmd_tx) = self.cast_cmd_tx.take() {
+            let _ = cmd_tx.send(CastCommand::Stop);
+        }
+        self.cast_state = None;
+    }
+
     fn process_events(&mut self, ctx: &egui::Context) {
         while let Ok(ev) = self.rx.try_recv() {
             match ev {
@@ -1094,6 +1178,29 @@ impl VideoDownloaderApp {
                 UiEvent::ThumbnailFailed(url) => {
                     self.thumbnails.insert(url, ThumbnailState::Failed);
                 }
+                UiEvent::CastDevicesUpdated(devs) => {
+                    self.cast_devices = devs;
+                }
+                UiEvent::CastDiscoveryDone(err) => {
+                    self.cast_discovering = false;
+                    if err.is_some() {
+                        self.cast_discovery_error = err;
+                    }
+                }
+                UiEvent::CastStateUpdated(seq, state) => {
+                    if seq == self.cast_seq {
+                        if state.is_none() {
+                            self.cast_cmd_tx = None;
+                            self.cast_seek_drag = None;
+                        }
+                        self.cast_state = state;
+                    }
+                }
+                UiEvent::CastError(seq, err) => {
+                    if seq == self.cast_seq {
+                        self.cast_error = Some(err);
+                    }
+                }
             }
         }
     }
@@ -1219,7 +1326,10 @@ impl eframe::App for VideoDownloaderApp {
 
         let popup_open = ctx.memory(|m| m.any_popup_open());
         if !popup_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if self.show_exit_confirm {
+            if self.show_cast_modal {
+                self.show_cast_modal = false;
+                self.cast_pending_item = None;
+            } else if self.show_exit_confirm {
                 self.show_exit_confirm = false;
             } else {
                 self.show_exit_confirm = true;
@@ -1229,7 +1339,17 @@ impl eframe::App for VideoDownloaderApp {
         let has_active = self.downloads.iter().any(|d| {
             d.status == "downloading" || d.status == "queued" || d.status == "processing"
         });
+        let cast_active = self.cast_discovering
+            || self.cast_state.as_ref().is_some_and(|st| {
+                matches!(
+                    st.status,
+                    CastPlayerStatus::Connecting
+                        | CastPlayerStatus::Buffering
+                        | CastPlayerStatus::Playing
+                )
+            });
         if has_active
+            || cast_active
             || self.inspecting
             || self.searching
             || self.search_loading_more
@@ -1919,6 +2039,9 @@ impl eframe::App for VideoDownloaderApp {
             });
         }
 
+        // Persistent bottom Cast control bar (rendered before CentralPanel)
+        self.render_cast_player_bar(ctx);
+
         // Main panel
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1932,6 +2055,8 @@ impl eframe::App for VideoDownloaderApp {
                 ui.add_space(16.0);
             });
         });
+
+        self.render_cast_modal(ctx);
 
         // Subtle border around borderless window when not in fullscreen
         if !is_fullscreen {
@@ -2015,6 +2140,7 @@ impl eframe::App for VideoDownloaderApp {
                                 )
                                 .clicked()
                             {
+                                self.stop_casting();
                                 self.rt.block_on(downloader::cancel_all_active(&self.manager));
                                 self.confirmed_exit = true;
                                 self.show_exit_confirm = false;
@@ -2522,6 +2648,16 @@ impl VideoDownloaderApp {
                                     s.studio_tracks_unit
                                 );
 
+                                let cast_item_from_info = CastMediaItem {
+                                    title: info.title.clone(),
+                                    artist: info.uploader.clone(),
+                                    url: info.url.clone(),
+                                    thumbnail: info.thumbnail.clone(),
+                                    is_audio: self.mode == "audio"
+                                        || (info.available_heights.is_empty()
+                                            && !info.available_audio_formats.is_empty()),
+                                };
+
                                 if can_download_single {
                                     let single_fill = if !self.download_playlist {
                                         egui::Color32::from_rgb(37, 99, 235)
@@ -2562,6 +2698,26 @@ impl VideoDownloaderApp {
                                         {
                                             self.start_download(Some(true), ctx.clone());
                                         }
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new(format!(
+                                                        "📺 {}",
+                                                        s.cast_button
+                                                    ))
+                                                    .strong()
+                                                    .color(egui::Color32::WHITE),
+                                                )
+                                                .fill(egui::Color32::from_rgb(109, 40, 217))
+                                                .min_size(egui::vec2(96.0, 32.0)),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.open_cast_picker(
+                                                cast_item_from_info.clone(),
+                                                ctx.clone(),
+                                            );
+                                        }
                                     });
                                 } else {
                                     let cta_text = if info.is_playlist {
@@ -2569,23 +2725,45 @@ impl VideoDownloaderApp {
                                     } else {
                                         s.studio_download.to_string()
                                     };
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                egui::RichText::new(cta_text)
+                                    ui.horizontal_wrapped(|ui| {
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new(cta_text)
+                                                        .strong()
+                                                        .color(egui::Color32::WHITE),
+                                                )
+                                                .fill(egui::Color32::from_rgb(37, 99, 235))
+                                                .min_size(egui::vec2(200.0, 32.0)),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.start_download(
+                                                Some(info.is_playlist || self.download_playlist),
+                                                ctx.clone(),
+                                            );
+                                        }
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new(format!(
+                                                        "📺 {}",
+                                                        s.cast_button
+                                                    ))
                                                     .strong()
                                                     .color(egui::Color32::WHITE),
+                                                )
+                                                .fill(egui::Color32::from_rgb(109, 40, 217))
+                                                .min_size(egui::vec2(96.0, 32.0)),
                                             )
-                                            .fill(egui::Color32::from_rgb(37, 99, 235))
-                                            .min_size(egui::vec2(200.0, 32.0)),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.start_download(
-                                            Some(info.is_playlist || self.download_playlist),
-                                            ctx.clone(),
-                                        );
-                                    }
+                                            .clicked()
+                                        {
+                                            self.open_cast_picker(
+                                                cast_item_from_info.clone(),
+                                                ctx.clone(),
+                                            );
+                                        }
+                                    });
                                 }
                             });
                         });
@@ -2786,6 +2964,7 @@ impl VideoDownloaderApp {
         let mut load_more_main = false;
         let mut download_item: Option<MusicSearchResult> = None;
         let mut inspect_item: Option<MusicSearchResult> = None;
+        let mut cast_item: Option<MusicSearchResult> = None;
         let mut download_selected: Option<Vec<MusicSearchResult>> = None;
         let mut open_manager = false;
         let mut thumbs_to_fetch: Vec<String> = Vec::new();
@@ -3055,6 +3234,7 @@ impl VideoDownloaderApp {
                             &mut thumbs_to_fetch,
                             &mut download_item,
                             &mut inspect_item,
+                            &mut cast_item,
                         );
 
                         let can_load_more = self
@@ -3111,6 +3291,9 @@ impl VideoDownloaderApp {
         if let Some(item) = inspect_item {
             self.inspect_search_result(&item, ctx.clone());
         }
+        if let Some(item) = cast_item {
+            self.open_cast_picker(cast_item_from_search(&item), ctx.clone());
+        }
         if open_manager {
             self.active_tab = ActiveTab::Manager;
         }
@@ -3135,6 +3318,7 @@ impl VideoDownloaderApp {
         let mut load_more_music = false;
         let mut download_item: Option<MusicSearchResult> = None;
         let mut inspect_item: Option<MusicSearchResult> = None;
+        let mut cast_item: Option<MusicSearchResult> = None;
         let mut download_selected: Option<Vec<MusicSearchResult>> = None;
         let mut open_manager = false;
         let mut thumbs_to_fetch: Vec<String> = Vec::new();
@@ -3478,6 +3662,7 @@ impl VideoDownloaderApp {
                                 &mut thumbs_to_fetch,
                                 &mut download_item,
                                 &mut inspect_item,
+                                &mut cast_item,
                             );
 
                             let can_load_more = self.search_source_filter != SearchSourceFilter::Bandcamp
@@ -3533,6 +3718,9 @@ impl VideoDownloaderApp {
         }
         if let Some(item) = inspect_item {
             self.inspect_search_result(&item, ctx.clone());
+        }
+        if let Some(item) = cast_item {
+            self.open_cast_picker(cast_item_from_search(&item), ctx.clone());
         }
         if open_manager {
             self.active_tab = ActiveTab::Manager;
@@ -4407,6 +4595,519 @@ impl VideoDownloaderApp {
             });
         });
     }
+
+    fn render_cast_player_bar(&mut self, ctx: &egui::Context) {
+        if self.cast_state.is_none() && self.cast_error.is_none() {
+            return;
+        }
+        let s = i18n::strings(self.settings.language);
+        let scale = self.font_scale();
+        let state_opt = self.cast_state.clone();
+        let err_opt = self.cast_error.clone();
+
+        let mut stop_clicked = false;
+        let mut dismiss_error = false;
+        let mut send_cmd: Option<CastCommand> = None;
+
+        egui::TopBottomPanel::bottom("cast_player_bar").show(ctx, |ui| {
+            let bg = if err_opt.is_some() && state_opt.is_none() {
+                egui::Color32::from_rgb(127, 29, 29)
+            } else if self.settings.theme == ThemeMode::Dark {
+                egui::Color32::from_rgb(24, 34, 54)
+            } else {
+                egui::Color32::from_rgb(241, 245, 249)
+            };
+
+            egui::Frame::none()
+                .fill(bg)
+                .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                .show(ui, |ui| {
+                    if let Some(err) = &err_opt {
+                        ui.horizontal(|ui| {
+                            let err_color = if state_opt.is_none() {
+                                egui::Color32::WHITE
+                            } else {
+                                egui::Color32::from_rgb(248, 113, 113)
+                            };
+                            ui.label(
+                                egui::RichText::new(format!("📺 Cast: {}", err))
+                                    .small()
+                                    .color(err_color),
+                            );
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("✕").clicked() {
+                                    dismiss_error = true;
+                                }
+                            });
+                        });
+                        if state_opt.is_some() {
+                            ui.add_space(4.0);
+                        }
+                    }
+
+                    if let Some(st) = &state_opt {
+                        ui.horizontal(|ui| {
+                            if let Some(turl) = &st.thumbnail {
+                                if let Some(ThumbnailState::Ready(tex)) = self.thumbnails.get(turl)
+                                {
+                                    ui.add(
+                                        egui::Image::new(tex)
+                                            .max_size(egui::vec2(38.0, 38.0))
+                                            .rounding(6.0),
+                                    );
+                                    ui.add_space(6.0);
+                                }
+                            }
+
+                            let (status_lbl, status_col) = match st.status {
+                                CastPlayerStatus::Connecting => (
+                                    s.cast_status_connecting,
+                                    egui::Color32::from_rgb(59, 130, 246),
+                                ),
+                                CastPlayerStatus::Buffering => (
+                                    s.cast_status_buffering,
+                                    egui::Color32::from_rgb(245, 158, 11),
+                                ),
+                                CastPlayerStatus::Playing => (
+                                    s.cast_status_playing,
+                                    egui::Color32::from_rgb(16, 185, 129),
+                                ),
+                                CastPlayerStatus::Paused => (
+                                    s.cast_status_paused,
+                                    egui::Color32::from_rgb(148, 163, 184),
+                                ),
+                                CastPlayerStatus::Idle => (
+                                    s.cast_status_idle,
+                                    egui::Color32::from_rgb(148, 163, 184),
+                                ),
+                            };
+
+                            ui.vertical(|ui| {
+                                ui.set_max_width(
+                                    (ui.available_width() - 420.0 * scale.max(1.0)).max(160.0),
+                                );
+                                ui.horizontal(|ui| {
+                                    egui::Frame::none()
+                                        .fill(status_col)
+                                        .rounding(4.0)
+                                        .inner_margin(egui::Margin::symmetric(6.0, 1.0))
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "📺 {} · {}",
+                                                    st.device.name, status_lbl
+                                                ))
+                                                .small()
+                                                .strong()
+                                                .color(egui::Color32::WHITE),
+                                            );
+                                        });
+                                    if st.status == CastPlayerStatus::Connecting {
+                                        ui.label(
+                                            egui::RichText::new(s.cast_connecting)
+                                                .small()
+                                                .color(egui::Color32::from_rgb(96, 165, 250)),
+                                        );
+                                    }
+                                });
+                                let media_icon = if st.is_audio { "🎵" } else { "🎬" };
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{} {} — {}",
+                                        media_icon, st.title, st.artist
+                                    ))
+                                    .small()
+                                    .strong(),
+                                );
+                            });
+
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            egui::RichText::new(format!("⏹ {}", s.cast_stop))
+                                                .small()
+                                                .strong()
+                                                .color(egui::Color32::WHITE),
+                                        )
+                                        .fill(egui::Color32::from_rgb(220, 38, 38)),
+                                    )
+                                    .clicked()
+                                {
+                                    stop_clicked = true;
+                                }
+
+                                let is_paused = st.status == CastPlayerStatus::Paused;
+                                let can_toggle = matches!(
+                                    st.status,
+                                    CastPlayerStatus::Playing
+                                        | CastPlayerStatus::Paused
+                                        | CastPlayerStatus::Buffering
+                                );
+                                let play_pause_lbl = if is_paused {
+                                    format!("▶ {}", s.cast_resume)
+                                } else {
+                                    format!("⏸ {}", s.cast_pause)
+                                };
+                                if ui
+                                    .add_enabled(
+                                        can_toggle,
+                                        egui::Button::new(
+                                            egui::RichText::new(play_pause_lbl).small().strong(),
+                                        ),
+                                    )
+                                    .clicked()
+                                {
+                                    send_cmd = Some(if is_paused {
+                                        CastCommand::Play
+                                    } else {
+                                        CastCommand::Pause
+                                    });
+                                }
+
+                                ui.add_space(6.0);
+                                let mut vol = st.volume;
+                                let vol_resp = ui.add_sized(
+                                    [78.0, 18.0],
+                                    egui::Slider::new(&mut vol, 0.0..=1.0).show_value(false),
+                                );
+                                if vol_resp.drag_stopped()
+                                    || (vol_resp.changed() && !vol_resp.dragged())
+                                {
+                                    send_cmd = Some(CastCommand::SetVolume(vol));
+                                }
+
+                                let mute_icon = if st.muted || st.volume <= 0.01 {
+                                    "🔇"
+                                } else {
+                                    "🔊"
+                                };
+                                if ui.button(mute_icon).clicked() {
+                                    send_cmd = Some(CastCommand::SetMuted(!st.muted));
+                                }
+
+                                if let Some(dur) = st.duration.filter(|d| *d > 0.0 && d.is_finite())
+                                {
+                                    ui.add_space(6.0);
+                                    let mut pos =
+                                        self.cast_seek_drag.unwrap_or(st.current_time).clamp(0.0, dur);
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} / {}",
+                                            format_duration(Some(pos)),
+                                            format_duration(Some(dur))
+                                        ))
+                                        .small()
+                                        .monospace()
+                                        .weak(),
+                                    );
+                                    let seek_resp = ui.add_enabled(
+                                        st.seekable,
+                                        egui::Slider::new(&mut pos, 0.0..=dur).show_value(false),
+                                    );
+                                    if seek_resp.dragged() {
+                                        self.cast_seek_drag = Some(pos);
+                                    } else if seek_resp.drag_stopped() {
+                                        self.cast_seek_drag = None;
+                                        send_cmd = Some(CastCommand::Seek(pos));
+                                    } else if seek_resp.changed() {
+                                        self.cast_seek_drag = None;
+                                        send_cmd = Some(CastCommand::Seek(pos));
+                                    }
+                                } else if st.current_time > 0.0 {
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        egui::RichText::new(format_duration(Some(st.current_time)))
+                                            .small()
+                                            .monospace()
+                                            .weak(),
+                                    );
+                                }
+                            });
+                        });
+                    }
+                });
+        });
+
+        if dismiss_error {
+            self.cast_error = None;
+        }
+        if stop_clicked {
+            self.stop_casting();
+        } else if let Some(cmd) = send_cmd {
+            if let Some(cmd_tx) = &self.cast_cmd_tx {
+                let _ = cmd_tx.send(cmd);
+            }
+        }
+    }
+
+    fn render_cast_modal(&mut self, ctx: &egui::Context) {
+        if !self.show_cast_modal {
+            return;
+        }
+        let s = i18n::strings(self.settings.language);
+        let scale = self.font_scale();
+
+        let mut close_modal = false;
+        let mut rescan = false;
+        let mut picked_device: Option<CastDevice> = None;
+
+        egui::Area::new(egui::Id::new("cast_modal_backdrop"))
+            .fixed_pos(egui::Pos2::ZERO)
+            .order(egui::Order::Middle)
+            .show(ctx, |ui| {
+                let screen = ctx.screen_rect();
+                let resp = ui.allocate_rect(screen, egui::Sense::click());
+                ui.painter().rect_filled(
+                    screen,
+                    0.0,
+                    egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150),
+                );
+                if resp.clicked() {
+                    close_modal = true;
+                }
+            });
+
+        let modal_w = (500.0 * scale.max(1.0)).min((ctx.screen_rect().width() - 32.0).max(340.0));
+        egui::Window::new(format!("📺 {}", s.cast_modal_title))
+            .id(egui::Id::new("cast_picker_modal"))
+            .order(egui::Order::Foreground)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .fixed_size([modal_w, 0.0])
+            .show(ctx, |ui| {
+                if let Some(item) = &self.cast_pending_item {
+                    ui.horizontal(|ui| {
+                        let icon = if item.is_audio { "🎵" } else { "🎬" };
+                        ui.label(egui::RichText::new(format!("{} {}", icon, item.title)).strong());
+                    });
+                    if !item.artist.trim().is_empty() {
+                        ui.label(egui::RichText::new(&item.artist).small().weak());
+                    }
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+                }
+
+                ui.horizontal(|ui| {
+                    if self.cast_discovering {
+                        ui.label(
+                            egui::RichText::new(format!("⏳ {}", s.cast_scanning))
+                                .small()
+                                .color(egui::Color32::from_rgb(59, 130, 246)),
+                        );
+                    } else {
+                        ui.label(egui::RichText::new("LAN Cast").small().weak());
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add_enabled(
+                                !self.cast_discovering,
+                                egui::Button::new(format!("🔄 {}", s.cast_scan_btn)).small(),
+                            )
+                            .clicked()
+                        {
+                            rescan = true;
+                        }
+                    });
+                });
+
+                if let Some(err) = &self.cast_discovery_error {
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(err)
+                            .small()
+                            .color(egui::Color32::from_rgb(239, 68, 68)),
+                    );
+                }
+
+                ui.add_space(8.0);
+
+                // Merge discovered devices with last manually connected device if not already listed
+                let mut candidates = self.cast_devices.clone();
+                if let Some(last) = &self.last_cast_device {
+                    if !candidates
+                        .iter()
+                        .any(|d| d.id == last.id || (d.host == last.host && d.port == last.port))
+                    {
+                        candidates.push(last.clone());
+                    }
+                }
+
+                if candidates.is_empty() {
+                    egui::Frame::group(ui.style())
+                        .inner_margin(12.0)
+                        .rounding(8.0)
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.label(egui::RichText::new(s.cast_no_devices).small().weak());
+                        });
+                } else {
+                    egui::ScrollArea::vertical()
+                        .id_salt("cast_devices_scroll")
+                        .max_height(210.0)
+                        .show(ui, |ui| {
+                            for dev in &candidates {
+                                ui.push_id(&dev.id, |ui| {
+                                egui::Frame::group(ui.style())
+                                    .inner_margin(10.0)
+                                    .rounding(8.0)
+                                    .show(ui, |ui| {
+                                        ui.set_width(ui.available_width());
+                                        ui.horizontal(|ui| {
+                                            ui.vertical(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(format!("📺 {}", dev.name))
+                                                        .strong(),
+                                                );
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "{} · {}:{}",
+                                                        dev.model, dev.host, dev.port
+                                                    ))
+                                                    .small()
+                                                    .monospace()
+                                                    .weak(),
+                                                );
+                                            });
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if ui
+                                                        .add(
+                                                            egui::Button::new(
+                                                                egui::RichText::new(
+                                                                    s.cast_connect_btn,
+                                                                )
+                                                                .small()
+                                                                .strong()
+                                                                .color(egui::Color32::WHITE),
+                                                            )
+                                                            .fill(egui::Color32::from_rgb(
+                                                                109, 40, 217,
+                                                            )),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        picked_device = Some(dev.clone());
+                                                    }
+                                                },
+                                            );
+                                        });
+                                    });
+                                });
+                                ui.add_space(4.0);
+                            }
+                        });
+                }
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new(s.cast_manual_ip).small().weak());
+                ui.add_space(4.0);
+
+                ui.horizontal(|ui| {
+                    let input_w = (ui.available_width() - 125.0 * scale.max(1.0)).max(150.0);
+                    let resp = ui.add_sized(
+                        [input_w, 28.0],
+                        egui::TextEdit::singleline(&mut self.cast_manual_ip)
+                            .hint_text("192.168.1.50"),
+                    );
+                    let parsed_manual = parse_manual_cast_device(&self.cast_manual_ip);
+                    let enter_pressed =
+                        resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let btn_clicked = ui
+                        .add_enabled(
+                            parsed_manual.is_some(),
+                            egui::Button::new(
+                                egui::RichText::new(s.cast_connect_btn)
+                                    .small()
+                                    .strong()
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(egui::Color32::from_rgb(37, 99, 235))
+                            .min_size(egui::vec2((115.0 * scale).round(), 28.0)),
+                        )
+                        .clicked();
+
+                    if (btn_clicked || enter_pressed) && parsed_manual.is_some() {
+                        picked_device = parsed_manual;
+                    }
+                });
+
+                ui.add_space(10.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(s.cast_close).clicked() {
+                        close_modal = true;
+                    }
+                });
+            });
+
+        if rescan {
+            self.start_cast_discovery(ctx.clone());
+        }
+        if let Some(dev) = picked_device {
+            if let Some(item) = self.cast_pending_item.clone() {
+                self.start_casting_to_device(dev, item, ctx.clone());
+            }
+        } else if close_modal {
+            self.show_cast_modal = false;
+            self.cast_pending_item = None;
+        }
+    }
+}
+
+fn cast_item_from_search(item: &MusicSearchResult) -> CastMediaItem {
+    CastMediaItem {
+        title: item.title.clone(),
+        artist: item.artist.clone(),
+        url: item.url.clone(),
+        thumbnail: item.thumbnail.clone(),
+        is_audio: item.kind != MusicSearchItemKind::Video,
+    }
+}
+
+fn parse_manual_cast_device(raw: &str) -> Option<CastDevice> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (host, port) = if let Some(rest) = trimmed.strip_prefix('[') {
+        if let Some((ip_part, tail)) = rest.split_once(']') {
+            let port = tail
+                .strip_prefix(':')
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(8009);
+            (ip_part.trim().to_string(), port)
+        } else {
+            return None;
+        }
+    } else if let Some((h, p)) = trimmed.rsplit_once(':') {
+        if !h.contains(':') {
+            if let Ok(port) = p.parse::<u16>() {
+                (h.trim().to_string(), port)
+            } else {
+                return None;
+            }
+        } else {
+            (trimmed.to_string(), 8009)
+        }
+    } else {
+        (trimmed.to_string(), 8009)
+    };
+
+    if host.is_empty() || host.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(CastDevice {
+        id: format!("manual:{}:{}", host, port),
+        name: host.clone(),
+        model: "Chromecast / Android TV".to_string(),
+        host,
+        port,
+    })
 }
 
 fn video_quality_label(q: &str, s: &i18n::Strings) -> String {
@@ -4481,6 +5182,7 @@ fn render_search_results_scroll(
     thumbs_to_fetch: &mut Vec<String>,
     download_item: &mut Option<MusicSearchResult>,
     inspect_item: &mut Option<MusicSearchResult>,
+    cast_item: &mut Option<MusicSearchResult>,
 ) {
     let ctrl_held = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
 
@@ -4544,7 +5246,7 @@ fn render_search_results_scroll(
                             let clip = ui.clip_rect();
                             let row_top = ui.cursor().top();
                             let near_visible = row_top >= clip.top() - 250.0 && row_top <= clip.bottom() + 250.0;
-                            let body_w = (ui.available_width() - 255.0 * scale.max(1.0)).max(160.0);
+                            let body_w = (ui.available_width() - 330.0 * scale.max(1.0)).max(150.0);
                             let body_resp = ui
                                 .scope(|ui| {
                                     ui.set_min_width(body_w);
@@ -4633,6 +5335,24 @@ fn render_search_results_scroll(
                                         .clicked()
                                     {
                                         *download_item = Some(item.clone());
+                                    }
+
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new(format!(
+                                                    "📺 {}",
+                                                    s.cast_button
+                                                ))
+                                                .small()
+                                                .strong()
+                                                .color(egui::Color32::WHITE),
+                                            )
+                                            .fill(egui::Color32::from_rgb(109, 40, 217)),
+                                        )
+                                        .clicked()
+                                    {
+                                        *cast_item = Some(item.clone());
                                     }
 
                                     if ui
