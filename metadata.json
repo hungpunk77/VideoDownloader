@@ -1,0 +1,6 @@
+{
+  "name": "VideoDownloader2.3",
+  "description": "Rust alapú videó- és zeneletöltő alkalmazás yt-dlp motorral, letöltéskezelővel, vágólap-támogatással, világos/sötét móddal és automatikus yt-dlp verzióellenőrzéssel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
