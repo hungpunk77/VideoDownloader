@@ -693,7 +693,6 @@ pub async fn search_music(
     let pagination = SearchPagination {
         query: trimmed,
         include_ytm,
-        include_bandcamp,
         ytm_songs_continuation: ytm_songs_cont,
         ytm_albums_continuation: ytm_albums_cont,
         ytm_has_more,
@@ -1928,7 +1927,6 @@ pub async fn search_all_supported(query: String) -> Result<SearchBatch, String> 
     let pagination = SearchPagination {
         query: trimmed,
         include_ytm: true,
-        include_bandcamp: true,
         yt_has_more: yt_cont.is_some(),
         yt_continuation: yt_cont,
         ytm_has_more: ytm_albums_cont.is_some() || ytm_songs_cont.is_some(),

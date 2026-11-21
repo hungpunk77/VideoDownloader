@@ -211,7 +211,6 @@ pub struct MusicSearchResult {
 pub struct SearchPagination {
     pub query: String,
     pub include_ytm: bool,
-    pub include_bandcamp: bool,
 
     pub yt_continuation: Option<String>,
     pub yt_has_more: bool,
