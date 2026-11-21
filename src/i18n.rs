@@ -115,6 +115,8 @@ pub struct Strings {
     pub search_no_results: &'static str,
     pub search_need_query: &'static str,
     pub search_need_source: &'static str,
+    pub search_load_more: &'static str,
+    pub search_loading_more: &'static str,
 
     pub status_queued: &'static str,
     pub status_downloading: &'static str,
@@ -312,6 +314,8 @@ const EN: Strings = Strings {
     search_no_results: "No matching items found for this filter.",
     search_need_query: "Enter a search query first.",
     search_need_source: "Select at least one search source (YouTube Music or Bandcamp).",
+    search_load_more: "Load more results",
+    search_loading_more: "Loading more results...",
 
     status_queued: "Queued",
     status_downloading: "Downloading",
@@ -509,6 +513,8 @@ const DE: Strings = Strings {
     search_no_results: "Keine passenden Treffer für diesen Filter gefunden.",
     search_need_query: "Bitte zuerst einen Suchbegriff eingeben.",
     search_need_source: "Wählen Sie mindestens eine Quelle (YouTube Music oder Bandcamp).",
+    search_load_more: "Weitere Ergebnisse laden",
+    search_loading_more: "Lade weitere Ergebnisse...",
 
     status_queued: "Wartend",
     status_downloading: "Lädt",
@@ -706,6 +712,8 @@ const HU: Strings = Strings {
     search_no_results: "Nincs a szűrésnek megfelelő találat.",
     search_need_query: "Először írjon be egy keresőkifejezést.",
     search_need_source: "Válasszon ki legalább egy keresési forrást (YouTube Music vagy Bandcamp).",
+    search_load_more: "További találatok betöltése",
+    search_loading_more: "További találatok betöltése...",
 
     status_queued: "Sorban áll",
     status_downloading: "Letöltés",

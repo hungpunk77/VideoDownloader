@@ -8,7 +8,7 @@ use crate::types::{
     has_single_video_in_url, is_bandcamp_url, is_yt_music_url, is_youtube_mix_or_radio_url,
     looks_like_url, strip_youtube_playlist_params, AppLanguage, AppSettings, DownloadItem,
     DownloadRequest, EngineStatus, MediaInfo, MusicSearchItemKind, MusicSearchResult,
-    MusicSearchSource, ThemeMode,
+    MusicSearchSource, SearchPagination, ThemeMode,
 };
 use eframe::egui;
 use std::collections::{HashMap, HashSet};
@@ -114,7 +114,9 @@ pub struct VideoDownloaderApp {
 
     // Main tab unified multi-platform search
     main_searching: bool,
+    main_loading_more: bool,
     main_search_results: Vec<MusicSearchResult>,
+    main_search_pagination: Option<SearchPagination>,
     main_search_last_query: String,
     main_search_error: Option<String>,
     main_search_type_filter: SearchTypeFilter,
@@ -130,7 +132,9 @@ pub struct VideoDownloaderApp {
     search_type_filter: SearchTypeFilter,
     search_source_filter: SearchSourceFilter,
     searching: bool,
+    search_loading_more: bool,
     search_results: Vec<MusicSearchResult>,
+    search_pagination: Option<SearchPagination>,
     search_last_query: String,
     search_error: Option<String>,
     search_selected_ids: HashSet<String>,
@@ -200,7 +204,9 @@ impl VideoDownloaderApp {
             cookie_error_msg: None,
             thumbnails: HashMap::new(),
             main_searching: false,
+            main_loading_more: false,
             main_search_results: Vec::new(),
+            main_search_pagination: None,
             main_search_last_query: String::new(),
             main_search_error: None,
             main_search_type_filter: SearchTypeFilter::All,
@@ -214,7 +220,9 @@ impl VideoDownloaderApp {
             search_type_filter: SearchTypeFilter::All,
             search_source_filter: SearchSourceFilter::All,
             searching: false,
+            search_loading_more: false,
             search_results: Vec::new(),
+            search_pagination: None,
             search_last_query: String::new(),
             search_error: None,
             search_selected_ids: HashSet::new(),
@@ -415,7 +423,7 @@ impl VideoDownloaderApp {
         if self.thumbnails.contains_key(url) {
             return;
         }
-        if self.thumbnails.len() > 250 {
+        if self.thumbnails.len() > 1500 {
             self.thumbnails.clear();
         }
         self.thumbnails
@@ -633,6 +641,8 @@ impl VideoDownloaderApp {
         self.main_search_seq = self.main_search_seq.wrapping_add(1);
         let seq = self.main_search_seq;
         self.main_searching = true;
+        self.main_loading_more = false;
+        self.main_search_pagination = None;
         self.main_search_error = None;
         self.main_search_queued_notice = None;
         self.studio_error = None;
@@ -640,11 +650,44 @@ impl VideoDownloaderApp {
         let tx = self.tx.clone();
         self.rt.spawn(async move {
             match search::search_all_supported(query.clone()).await {
-                Ok(results) => {
-                    let _ = tx.send(UiEvent::MainSearchSuccess(seq, query, results));
+                Ok(batch) => {
+                    let _ = tx.send(UiEvent::MainSearchSuccess(seq, query, batch));
                 }
                 Err(e) => {
                     let _ = tx.send(UiEvent::MainSearchError(seq, e));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    fn load_more_main_search(&mut self, ctx: egui::Context) {
+        if self.main_searching || self.main_loading_more {
+            return;
+        }
+        let Some(pag) = self.main_search_pagination.clone() else {
+            return;
+        };
+        let src_filter = self.main_search_source_filter;
+        if !pag.has_more_for_source(src_filter) {
+            return;
+        }
+        let existing_urls: HashSet<String> = self
+            .main_search_results
+            .iter()
+            .map(|r| r.url.trim().trim_end_matches('/').to_ascii_lowercase())
+            .collect();
+        let seq = self.main_search_seq;
+        self.main_loading_more = true;
+        self.main_search_error = None;
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            match search::load_more_all_supported(pag, src_filter, existing_urls).await {
+                Ok(batch) => {
+                    let _ = tx.send(UiEvent::MainSearchMoreSuccess(seq, batch));
+                }
+                Err(e) => {
+                    let _ = tx.send(UiEvent::MainSearchMoreError(seq, e));
                 }
             }
             ctx.request_repaint();
@@ -665,6 +708,8 @@ impl VideoDownloaderApp {
         self.search_seq = self.search_seq.wrapping_add(1);
         let seq = self.search_seq;
         self.searching = true;
+        self.search_loading_more = false;
+        self.search_pagination = None;
         self.search_error = None;
         self.search_queued_notice = None;
         let include_ytm = self.search_include_ytm;
@@ -672,11 +717,46 @@ impl VideoDownloaderApp {
         let tx = self.tx.clone();
         self.rt.spawn(async move {
             match search::search_music(query.clone(), include_ytm, include_bc).await {
-                Ok(results) => {
-                    let _ = tx.send(UiEvent::SearchSuccess(seq, query, results));
+                Ok(batch) => {
+                    let _ = tx.send(UiEvent::SearchSuccess(seq, query, batch));
                 }
                 Err(e) => {
                     let _ = tx.send(UiEvent::SearchError(seq, e));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    fn load_more_music_search(&mut self, ctx: egui::Context) {
+        if self.searching || self.search_loading_more {
+            return;
+        }
+        if self.search_source_filter == SearchSourceFilter::Bandcamp {
+            return;
+        }
+        let Some(pag) = self.search_pagination.clone() else {
+            return;
+        };
+        if !pag.ytm_has_more {
+            return;
+        }
+        let existing_urls: HashSet<String> = self
+            .search_results
+            .iter()
+            .map(|r| r.url.trim().trim_end_matches('/').to_ascii_lowercase())
+            .collect();
+        let seq = self.search_seq;
+        self.search_loading_more = true;
+        self.search_error = None;
+        let tx = self.tx.clone();
+        self.rt.spawn(async move {
+            match search::load_more_music(pag, existing_urls).await {
+                Ok(batch) => {
+                    let _ = tx.send(UiEvent::SearchMoreSuccess(seq, batch));
+                }
+                Err(e) => {
+                    let _ = tx.send(UiEvent::SearchMoreError(seq, e));
                 }
             }
             ctx.request_repaint();
@@ -906,50 +986,86 @@ impl VideoDownloaderApp {
                     self.studio_error =
                         Some(i18n::translate_backend_error(&err, self.settings.language));
                 }
-                UiEvent::SearchSuccess(seq, q, results) => {
+                UiEvent::SearchSuccess(seq, q, batch) => {
                     if seq != self.search_seq {
                         continue;
                     }
                     self.searching = false;
+                    self.search_loading_more = false;
                     self.search_last_query = q;
                     self.search_error = None;
                     self.search_selected_ids.clear();
-                    for item in results.iter().take(16) {
+                    for item in batch.results.iter().take(16) {
                         if let Some(thumb) = item.thumbnail.as_deref() {
                             self.request_thumbnail(thumb, ctx);
                         }
                     }
-                    self.search_results = results;
+                    self.search_results = batch.results;
+                    self.search_pagination = Some(batch.pagination);
                 }
                 UiEvent::SearchError(seq, err) => {
                     if seq != self.search_seq {
                         continue;
                     }
                     self.searching = false;
+                    self.search_loading_more = false;
                     self.search_error = Some(err);
                 }
-                UiEvent::MainSearchSuccess(seq, q, results) => {
+                UiEvent::SearchMoreSuccess(seq, batch) => {
+                    if seq != self.search_seq {
+                        continue;
+                    }
+                    self.search_loading_more = false;
+                    self.search_results.extend(batch.results);
+                    self.search_pagination = Some(batch.pagination);
+                }
+                UiEvent::SearchMoreError(seq, err) => {
+                    if seq != self.search_seq {
+                        continue;
+                    }
+                    self.search_loading_more = false;
+                    self.search_error = Some(err);
+                }
+                UiEvent::MainSearchSuccess(seq, q, batch) => {
                     if seq != self.main_search_seq {
                         continue;
                     }
                     self.main_searching = false;
+                    self.main_loading_more = false;
                     self.main_search_last_query = q;
                     self.main_search_error = None;
                     self.main_search_selected_ids.clear();
                     self.main_search_type_filter = SearchTypeFilter::All;
                     self.main_search_source_filter = None;
-                    for item in results.iter().take(16) {
+                    for item in batch.results.iter().take(16) {
                         if let Some(thumb) = item.thumbnail.as_deref() {
                             self.request_thumbnail(thumb, ctx);
                         }
                     }
-                    self.main_search_results = results;
+                    self.main_search_results = batch.results;
+                    self.main_search_pagination = Some(batch.pagination);
                 }
                 UiEvent::MainSearchError(seq, err) => {
                     if seq != self.main_search_seq {
                         continue;
                     }
                     self.main_searching = false;
+                    self.main_loading_more = false;
+                    self.main_search_error = Some(err);
+                }
+                UiEvent::MainSearchMoreSuccess(seq, batch) => {
+                    if seq != self.main_search_seq {
+                        continue;
+                    }
+                    self.main_loading_more = false;
+                    self.main_search_results.extend(batch.results);
+                    self.main_search_pagination = Some(batch.pagination);
+                }
+                UiEvent::MainSearchMoreError(seq, err) => {
+                    if seq != self.main_search_seq {
+                        continue;
+                    }
+                    self.main_loading_more = false;
                     self.main_search_error = Some(err);
                 }
                 UiEvent::DownloadUpdated(updated) => {
@@ -1116,7 +1232,9 @@ impl eframe::App for VideoDownloaderApp {
         if has_active
             || self.inspecting
             || self.searching
+            || self.search_loading_more
             || self.main_searching
+            || self.main_loading_more
             || self.checking_engines
             || self.updating_ytdlp
             || self.updating_ffmpeg
@@ -2665,6 +2783,7 @@ impl VideoDownloaderApp {
         let is_dark = self.settings.theme == ThemeMode::Dark;
 
         let mut close_search = false;
+        let mut load_more_main = false;
         let mut download_item: Option<MusicSearchResult> = None;
         let mut inspect_item: Option<MusicSearchResult> = None;
         let mut download_selected: Option<Vec<MusicSearchResult>> = None;
@@ -2808,11 +2927,28 @@ impl VideoDownloaderApp {
                                 .iter()
                                 .filter(|r| r.source == src)
                                 .count();
+                            let has_more_src = self
+                                .main_search_pagination
+                                .as_ref()
+                                .is_some_and(|p| p.has_more_for_source(Some(src)));
+                            let total_opt = self
+                                .main_search_pagination
+                                .as_ref()
+                                .and_then(|p| p.total_for_source(src));
+                            let src_lbl = if has_more_src {
+                                if let Some(tot) = total_opt.filter(|&t| t > count) {
+                                    format!("{} ({} / {})", src.label(), count, tot)
+                                } else {
+                                    format!("{} ({}+)", src.label(), count)
+                                }
+                            } else {
+                                format!("{} ({})", src.label(), count)
+                            };
                             if count > 0
                                 && ui
                                     .selectable_label(
                                         self.main_search_source_filter == Some(src),
-                                        format!("{} ({})", src.label(), count),
+                                        src_lbl,
                                     )
                                     .clicked()
                             {
@@ -2920,6 +3056,38 @@ impl VideoDownloaderApp {
                             &mut download_item,
                             &mut inspect_item,
                         );
+
+                        let can_load_more = self
+                            .main_search_pagination
+                            .as_ref()
+                            .is_some_and(|p| p.has_more_for_source(self.main_search_source_filter));
+                        if can_load_more || self.main_loading_more {
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                let btn_lbl = if self.main_loading_more {
+                                    format!("⏳ {}", s.search_loading_more)
+                                } else if let Some(src) = self.main_search_source_filter {
+                                    format!("⬇ {} ({})", s.search_load_more, src.label())
+                                } else {
+                                    format!("⬇ {}", s.search_load_more)
+                                };
+                                if ui
+                                    .add_enabled(
+                                        !self.main_loading_more && !self.main_searching,
+                                        egui::Button::new(
+                                            egui::RichText::new(btn_lbl)
+                                                .small()
+                                                .strong()
+                                                .color(egui::Color32::WHITE),
+                                        )
+                                        .fill(egui::Color32::from_rgb(13, 148, 136)),
+                                    )
+                                    .clicked()
+                                {
+                                    load_more_main = true;
+                                }
+                            });
+                        }
                     }
                 } else if !self.main_searching && !self.main_search_last_query.is_empty() {
                     ui.add_space(8.0);
@@ -2929,6 +3097,9 @@ impl VideoDownloaderApp {
 
         for turl in thumbs_to_fetch {
             self.request_thumbnail(&turl, ctx);
+        }
+        if load_more_main {
+            self.load_more_main_search(ctx.clone());
         }
         if let Some(items) = download_selected {
             self.main_search_selected_ids.clear();
@@ -2945,6 +3116,8 @@ impl VideoDownloaderApp {
         }
         if close_search {
             self.main_search_results.clear();
+            self.main_search_pagination = None;
+            self.main_loading_more = false;
             self.main_search_last_query.clear();
             self.main_search_error = None;
             self.main_search_selected_ids.clear();
@@ -2959,6 +3132,7 @@ impl VideoDownloaderApp {
         let is_dark = self.settings.theme == ThemeMode::Dark;
 
         let mut trigger_search = false;
+        let mut load_more_music = false;
         let mut download_item: Option<MusicSearchResult> = None;
         let mut inspect_item: Option<MusicSearchResult> = None;
         let mut download_selected: Option<Vec<MusicSearchResult>> = None;
@@ -3305,6 +3479,37 @@ impl VideoDownloaderApp {
                                 &mut download_item,
                                 &mut inspect_item,
                             );
+
+                            let can_load_more = self.search_source_filter != SearchSourceFilter::Bandcamp
+                                && self
+                                    .search_pagination
+                                    .as_ref()
+                                    .is_some_and(|p| p.ytm_has_more);
+                            if can_load_more || self.search_loading_more {
+                                ui.add_space(8.0);
+                                ui.horizontal(|ui| {
+                                    let btn_lbl = if self.search_loading_more {
+                                        format!("⏳ {}", s.search_loading_more)
+                                    } else {
+                                        format!("⬇ {} (YouTube Music)", s.search_load_more)
+                                    };
+                                    if ui
+                                        .add_enabled(
+                                            !self.search_loading_more && !self.searching,
+                                            egui::Button::new(
+                                                egui::RichText::new(btn_lbl)
+                                                    .small()
+                                                    .strong()
+                                                    .color(egui::Color32::WHITE),
+                                            )
+                                            .fill(egui::Color32::from_rgb(13, 148, 136)),
+                                        )
+                                        .clicked()
+                                    {
+                                        load_more_music = true;
+                                    }
+                                });
+                            }
                         });
                 }
             }
@@ -3315,6 +3520,9 @@ impl VideoDownloaderApp {
         }
         if trigger_search {
             self.run_music_search(ctx.clone());
+        }
+        if load_more_music {
+            self.load_more_music_search(ctx.clone());
         }
         if let Some(items) = download_selected {
             self.search_selected_ids.clear();
@@ -4333,6 +4541,9 @@ fn render_search_results_scroll(
                             }
                             ui.add_space(4.0);
 
+                            let clip = ui.clip_rect();
+                            let row_top = ui.cursor().top();
+                            let near_visible = row_top >= clip.top() - 250.0 && row_top <= clip.bottom() + 250.0;
                             let body_w = (ui.available_width() - 255.0 * scale.max(1.0)).max(160.0);
                             let body_resp = ui
                                 .scope(|ui| {
@@ -4349,7 +4560,7 @@ fn render_search_results_scroll(
                                                     );
                                                     ui.add_space(8.0);
                                                 }
-                                                None => {
+                                                None if near_visible && thumbs_to_fetch.len() < 24 => {
                                                     thumbs_to_fetch.push(turl.clone());
                                                 }
                                                 _ => {}

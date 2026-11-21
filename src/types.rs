@@ -207,6 +207,72 @@ pub struct MusicSearchResult {
     pub thumbnail: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SearchPagination {
+    pub query: String,
+    pub include_ytm: bool,
+    pub include_bandcamp: bool,
+
+    pub yt_continuation: Option<String>,
+    pub yt_has_more: bool,
+
+    pub ytm_songs_continuation: Option<String>,
+    pub ytm_albums_continuation: Option<String>,
+    pub ytm_has_more: bool,
+
+    pub dm_next_page: u32,
+    pub dm_total: Option<usize>,
+    pub dm_has_more: bool,
+
+    pub okru_offset: usize,
+    pub okru_total: Option<usize>,
+    pub okru_has_more: bool,
+
+    pub videa_cache_id: Option<String>,
+    pub videa_sort: String,
+    pub videa_last_item_id: Option<String>,
+    pub videa_item_count: usize,
+    pub videa_total: Option<usize>,
+    pub videa_has_more: bool,
+}
+
+impl SearchPagination {
+    pub fn has_more_for_source(&self, source: Option<MusicSearchSource>) -> bool {
+        match source {
+            Some(MusicSearchSource::Youtube) => self.yt_has_more,
+            Some(MusicSearchSource::YoutubeMusic) => self.ytm_has_more,
+            Some(MusicSearchSource::Bandcamp) => false,
+            Some(MusicSearchSource::Dailymotion) => self.dm_has_more,
+            Some(MusicSearchSource::Videa) => self.videa_has_more,
+            Some(MusicSearchSource::OkRu) => self.okru_has_more,
+            None => {
+                self.yt_has_more
+                    || self.ytm_has_more
+                    || self.dm_has_more
+                    || self.videa_has_more
+                    || self.okru_has_more
+            }
+        }
+    }
+
+    pub fn total_for_source(&self, source: MusicSearchSource) -> Option<usize> {
+        match source {
+            MusicSearchSource::Youtube => None,
+            MusicSearchSource::YoutubeMusic => None,
+            MusicSearchSource::Bandcamp => None,
+            MusicSearchSource::Dailymotion => self.dm_total,
+            MusicSearchSource::Videa => self.videa_total,
+            MusicSearchSource::OkRu => self.okru_total,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchBatch {
+    pub results: Vec<MusicSearchResult>,
+    pub pagination: SearchPagination,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadRequest {

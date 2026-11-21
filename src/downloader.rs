@@ -2,8 +2,8 @@ use crate::config;
 use crate::engines;
 use crate::types::{
     build_album_relative_path, clean_artist_name, is_bandcamp_url, is_yt_music_url,
-    strip_leading_artist_from_album, DownloadItem, DownloadRequest, MediaInfo, MusicSearchResult,
-    PlaylistEntry,
+    strip_leading_artist_from_album, DownloadItem, DownloadRequest, MediaInfo, PlaylistEntry,
+    SearchBatch,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -20,10 +20,14 @@ pub enum UiEvent {
     EngineActionError(String),
     InspectSuccess(u64, MediaInfo),
     InspectError(u64, String),
-    SearchSuccess(u64, String, Vec<MusicSearchResult>),
+    SearchSuccess(u64, String, SearchBatch),
     SearchError(u64, String),
-    MainSearchSuccess(u64, String, Vec<MusicSearchResult>),
+    SearchMoreSuccess(u64, SearchBatch),
+    SearchMoreError(u64, String),
+    MainSearchSuccess(u64, String, SearchBatch),
     MainSearchError(u64, String),
+    MainSearchMoreSuccess(u64, SearchBatch),
+    MainSearchMoreError(u64, String),
     DownloadUpdated(DownloadItem),
     ThumbnailLoaded(String, Vec<u8>),
     ThumbnailFailed(String),
