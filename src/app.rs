@@ -8,7 +8,7 @@ use crate::types::{
     build_album_folder_name, detect_playlist_intent, extract_domain_label, format_duration,
     has_single_video_in_url, is_bandcamp_url, is_yt_music_url, is_youtube_mix_or_radio_url,
     looks_like_url, strip_youtube_playlist_params, AppLanguage, AppSettings, CastDevice,
-    CastMediaItem, CastPlayerStatus, CastSessionState, DownloadItem, DownloadRequest,
+    CastMediaItem, CastMode, CastPlayerStatus, CastSessionState, DownloadItem, DownloadRequest,
     EngineStatus, MediaInfo, MusicSearchItemKind, MusicSearchResult, MusicSearchSource,
     SearchPagination, ThemeMode,
 };
@@ -964,9 +964,10 @@ impl VideoDownloaderApp {
 
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         self.cast_cmd_tx = Some(cmd_tx);
+        let cast_mode = self.settings.cast_mode;
         let tx = self.tx.clone();
         self.rt.spawn(async move {
-            cast::run_cast_session(seq, device, item, cmd_rx, tx, ctx).await;
+            cast::run_cast_session(seq, device, item, cast_mode, cmd_rx, tx, ctx).await;
         });
     }
 
@@ -975,6 +976,15 @@ impl VideoDownloaderApp {
         self.cast_seek_drag = None;
         if let Some(cmd_tx) = self.cast_cmd_tx.take() {
             let _ = cmd_tx.send(CastCommand::Stop);
+        }
+        self.cast_state = None;
+    }
+
+    fn detach_casting(&mut self) {
+        self.cast_seq = self.cast_seq.wrapping_add(1);
+        self.cast_seek_drag = None;
+        if let Some(cmd_tx) = self.cast_cmd_tx.take() {
+            let _ = cmd_tx.send(CastCommand::Detach);
         }
         self.cast_state = None;
     }
@@ -1367,7 +1377,8 @@ impl eframe::App for VideoDownloaderApp {
         let scale = self.font_scale();
         let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
 
-        // 8-direction edge/corner resize support for borderless window
+        // 8-direction edge/corner resize support for borderless window (Linux / non-Windows)
+        #[cfg(not(target_os = "windows"))]
         let resize_dir = if !is_fullscreen && !self.show_exit_confirm && !popup_open {
             let screen = ctx.screen_rect();
             let margin = 6.0_f32;
@@ -1394,6 +1405,7 @@ impl eframe::App for VideoDownloaderApp {
             None
         };
 
+        #[cfg(not(target_os = "windows"))]
         if let Some(dir) = resize_dir {
             let icon = match dir {
                 egui::ResizeDirection::North | egui::ResizeDirection::South => {
@@ -1821,9 +1833,10 @@ impl eframe::App for VideoDownloaderApp {
                 });
             });
 
-        // Borderless custom header bar with drag support & top-right Fullscreen / Window controls
+        // Custom header bar (borderless controls & drag on non-Windows; breadcrumb + theme/lang on all OSes)
         egui::TopBottomPanel::top("header_bar").show(ctx, |ui| {
             ui.add_space(6.0);
+            #[cfg(not(target_os = "windows"))]
             let mut controls_hovered = false;
             let row_resp = ui.horizontal(|ui| {
                 let tab_name = match self.active_tab {
@@ -1839,36 +1852,39 @@ impl eframe::App for VideoDownloaderApp {
                 ui.label(egui::RichText::new(tab_name).strong());
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let close_resp = draw_close_button(ui, s.win_close);
-                    controls_hovered |= close_resp.hovered();
-                    if close_resp.clicked() {
-                        self.show_exit_confirm = true;
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        let close_resp = draw_close_button(ui, s.win_close);
+                        controls_hovered |= close_resp.hovered();
+                        if close_resp.clicked() {
+                            self.show_exit_confirm = true;
+                        }
+
+                        ui.add_space(2.0);
+
+                        let fs_tooltip = if is_fullscreen {
+                            s.win_fullscreen_exit
+                        } else {
+                            s.win_fullscreen_enter
+                        };
+                        let fs_resp = draw_fullscreen_button(ui, is_fullscreen, fs_tooltip);
+                        controls_hovered |= fs_resp.hovered();
+                        if fs_resp.clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
+                        }
+
+                        ui.add_space(2.0);
+
+                        let min_resp = draw_minimize_button(ui, s.win_minimize);
+                        controls_hovered |= min_resp.hovered();
+                        if min_resp.clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        }
+
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(4.0);
                     }
-
-                    ui.add_space(2.0);
-
-                    let fs_tooltip = if is_fullscreen {
-                        s.win_fullscreen_exit
-                    } else {
-                        s.win_fullscreen_enter
-                    };
-                    let fs_resp = draw_fullscreen_button(ui, is_fullscreen, fs_tooltip);
-                    controls_hovered |= fs_resp.hovered();
-                    if fs_resp.clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
-                    }
-
-                    ui.add_space(2.0);
-
-                    let min_resp = draw_minimize_button(ui, s.win_minimize);
-                    controls_hovered |= min_resp.hovered();
-                    if min_resp.clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-                    }
-
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.add_space(4.0);
 
                     let mut chosen_lang = self.settings.language;
                     let lang_resp = egui::ComboBox::from_id_salt("header_lang_combo")
@@ -1883,7 +1899,12 @@ impl eframe::App for VideoDownloaderApp {
                                 );
                             }
                         });
-                    controls_hovered |= lang_resp.response.hovered();
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        controls_hovered |= lang_resp.response.hovered();
+                    }
+                    #[cfg(target_os = "windows")]
+                    let _ = &lang_resp;
                     if chosen_lang != self.settings.language {
                         self.set_language(chosen_lang);
                     }
@@ -1893,7 +1914,10 @@ impl eframe::App for VideoDownloaderApp {
                         ThemeMode::Light => format!("🌙 {}", s.dark_mode),
                     };
                     let theme_resp = ui.button(theme_btn_label);
-                    controls_hovered |= theme_resp.hovered();
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        controls_hovered |= theme_resp.hovered();
+                    }
                     if theme_resp.clicked() {
                         self.toggle_theme(ctx);
                     }
@@ -1901,29 +1925,34 @@ impl eframe::App for VideoDownloaderApp {
             });
             ui.add_space(6.0);
 
-            let header_rect = row_resp.response.rect.expand2(egui::vec2(8.0, 6.0));
-            let ptr_in_header = ctx.input(|i| {
-                i.pointer
-                    .hover_pos()
-                    .is_some_and(|p| header_rect.contains(p))
-            });
-            let drag_start =
-                ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
-            let dbl_click =
-                ctx.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
-            if !controls_hovered
-                && resize_dir.is_none()
-                && !self.show_exit_confirm
-                && !popup_open
-                && ptr_in_header
-                && !ctx.is_using_pointer()
+            #[cfg(not(target_os = "windows"))]
             {
-                if dbl_click {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
-                } else if drag_start && !is_fullscreen {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                let header_rect = row_resp.response.rect.expand2(egui::vec2(8.0, 6.0));
+                let ptr_in_header = ctx.input(|i| {
+                    i.pointer
+                        .hover_pos()
+                        .is_some_and(|p| header_rect.contains(p))
+                });
+                let drag_start =
+                    ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary));
+                let dbl_click =
+                    ctx.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
+                if !controls_hovered
+                    && resize_dir.is_none()
+                    && !self.show_exit_confirm
+                    && !popup_open
+                    && ptr_in_header
+                    && !ctx.is_using_pointer()
+                {
+                    if dbl_click {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
+                    } else if drag_start && !is_fullscreen {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
                 }
             }
+            #[cfg(target_os = "windows")]
+            let _ = row_resp;
         });
 
         // Update / missing engine banner
@@ -2058,7 +2087,8 @@ impl eframe::App for VideoDownloaderApp {
 
         self.render_cast_modal(ctx);
 
-        // Subtle border around borderless window when not in fullscreen
+        // Subtle border around borderless window when not in fullscreen (Linux / non-Windows)
+        #[cfg(not(target_os = "windows"))]
         if !is_fullscreen {
             let border_color = if self.settings.theme == ThemeMode::Dark {
                 egui::Color32::from_rgb(51, 65, 85)
@@ -2140,7 +2170,18 @@ impl eframe::App for VideoDownloaderApp {
                                 )
                                 .clicked()
                             {
-                                self.stop_casting();
+                                let keep_tv_playing = self
+                                    .cast_state
+                                    .as_ref()
+                                    .is_some_and(|st| st.cast_mode == CastMode::Direct);
+                                if keep_tv_playing {
+                                    self.detach_casting();
+                                    self.rt.block_on(tokio::time::sleep(
+                                        std::time::Duration::from_millis(60),
+                                    ));
+                                } else {
+                                    self.stop_casting();
+                                }
                                 self.rt.block_on(downloader::cancel_all_active(&self.manager));
                                 self.confirmed_exit = true;
                                 self.show_exit_confirm = false;
@@ -4545,6 +4586,36 @@ impl VideoDownloaderApp {
                 });
 
             ui.add_space(12.0);
+
+            // Chromecast / Android TV Cast mode
+            egui::Frame::group(ui.style())
+                .inner_margin(16.0)
+                .rounding(10.0)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(
+                        egui::RichText::new(s.set_cast_section)
+                            .size(15.0 * scale)
+                            .strong(),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(s.set_cast_mode_label).small().weak());
+                    ui.add_space(4.0);
+                    ui.radio_value(
+                        &mut self.settings_draft.cast_mode,
+                        CastMode::Relay,
+                        s.set_cast_mode_relay,
+                    );
+                    ui.radio_value(
+                        &mut self.settings_draft.cast_mode,
+                        CastMode::Direct,
+                        s.set_cast_mode_direct,
+                    );
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(s.set_cast_mode_note).small().weak());
+                });
+
+            ui.add_space(12.0);
             ui.horizontal(|ui| {
                 if self.settings_saved_notice {
                     ui.label(
@@ -4700,6 +4771,28 @@ impl VideoDownloaderApp {
                                                 .small()
                                                 .strong()
                                                 .color(egui::Color32::WHITE),
+                                            );
+                                        });
+                                    let (mode_lbl, mode_col) = match st.cast_mode {
+                                        CastMode::Direct => (
+                                            s.cast_mode_badge_direct,
+                                            egui::Color32::from_rgb(13, 148, 136),
+                                        ),
+                                        CastMode::Relay => (
+                                            s.cast_mode_badge_relay,
+                                            egui::Color32::from_rgb(71, 85, 105),
+                                        ),
+                                    };
+                                    egui::Frame::none()
+                                        .fill(mode_col)
+                                        .rounding(4.0)
+                                        .inner_margin(egui::Margin::symmetric(5.0, 1.0))
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new(mode_lbl)
+                                                    .small()
+                                                    .strong()
+                                                    .color(egui::Color32::WHITE),
                                             );
                                         });
                                     if st.status == CastPlayerStatus::Connecting {
@@ -4898,7 +4991,15 @@ impl VideoDownloaderApp {
                                 .color(egui::Color32::from_rgb(59, 130, 246)),
                         );
                     } else {
-                        ui.label(egui::RichText::new("LAN Cast").small().weak());
+                        let mode_lbl = match self.settings.cast_mode {
+                            CastMode::Direct => s.cast_mode_badge_direct,
+                            CastMode::Relay => s.cast_mode_badge_relay,
+                        };
+                        ui.label(
+                            egui::RichText::new(format!("LAN Cast · {}", mode_lbl))
+                                .small()
+                                .weak(),
+                        );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
@@ -5450,6 +5551,7 @@ fn format_search_meta(item: &MusicSearchResult) -> String {
     parts.join(" · ")
 }
 
+#[cfg(not(target_os = "windows"))]
 fn draw_fullscreen_button(
     ui: &mut egui::Ui,
     is_fullscreen: bool,
@@ -5521,6 +5623,7 @@ fn draw_fullscreen_button(
     resp.on_hover_text(tooltip)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn draw_minimize_button(ui: &mut egui::Ui, tooltip: &str) -> egui::Response {
     let size = egui::vec2(26.0, 24.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
@@ -5545,6 +5648,7 @@ fn draw_minimize_button(ui: &mut egui::Ui, tooltip: &str) -> egui::Response {
     resp.on_hover_text(tooltip)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn draw_close_button(ui: &mut egui::Ui, tooltip: &str) -> egui::Response {
     let size = egui::vec2(26.0, 24.0);
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());

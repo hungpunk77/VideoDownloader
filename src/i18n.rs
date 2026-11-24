@@ -183,9 +183,13 @@ pub struct Strings {
     pub set_font_preset_large: &'static str,
     pub set_font_preset_xlarge: &'static str,
 
+    #[allow(dead_code)]
     pub win_fullscreen_enter: &'static str,
+    #[allow(dead_code)]
     pub win_fullscreen_exit: &'static str,
+    #[allow(dead_code)]
     pub win_minimize: &'static str,
+    #[allow(dead_code)]
     pub win_close: &'static str,
 
     pub exit_confirm_title: &'static str,
@@ -215,6 +219,13 @@ pub struct Strings {
     pub cast_resume: &'static str,
     pub cast_stop: &'static str,
     pub cast_close: &'static str,
+    pub set_cast_section: &'static str,
+    pub set_cast_mode_label: &'static str,
+    pub set_cast_mode_relay: &'static str,
+    pub set_cast_mode_direct: &'static str,
+    pub set_cast_mode_note: &'static str,
+    pub cast_mode_badge_relay: &'static str,
+    pub cast_mode_badge_direct: &'static str,
 }
 
 const EN: Strings = Strings {
@@ -432,6 +443,13 @@ const EN: Strings = Strings {
     cast_resume: "Play",
     cast_stop: "Stop Cast",
     cast_close: "Close",
+    set_cast_section: "Chromecast / Android TV Casting",
+    set_cast_mode_label: "Cast delivery mode",
+    set_cast_mode_relay: "Local Proxy / FFmpeg Relay (Works on all sites; stops when app closes)",
+    set_cast_mode_direct: "Direct Link / TV Standalone (Like phone Cast; keeps playing after closing app)",
+    set_cast_mode_note: "Note: Direct Link skips your PC and sends the remote stream URL directly to the TV. Some protected or split HD streams (e.g. 1080p YouTube or cookie-locked sites) are more reliable in Relay mode.",
+    cast_mode_badge_relay: "Relay",
+    cast_mode_badge_direct: "Direct",
 };
 
 const DE: Strings = Strings {
@@ -649,6 +667,13 @@ const DE: Strings = Strings {
     cast_resume: "Fortsetzen",
     cast_stop: "Cast beenden",
     cast_close: "Schließen",
+    set_cast_section: "Chromecast / Android TV Casting",
+    set_cast_mode_label: "Cast-Übertragungsmodus",
+    set_cast_mode_relay: "Lokaler Proxy / FFmpeg-Relay (Zuverlässig auf allen Seiten; stoppt beim Beenden)",
+    set_cast_mode_direct: "Direktlink / TV eigenständig (Wie Handy-Cast; läuft nach Beenden weiter)",
+    set_cast_mode_note: "Hinweis: Im Direktlink-Modus erhält der TV direkt die Stream-URL. Geschützte oder getrennte HD-Streams (z. B. YouTube 1080p) funktionieren im Relay-Modus zuverlässiger.",
+    cast_mode_badge_relay: "Relay",
+    cast_mode_badge_direct: "Direkt",
 };
 
 const HU: Strings = Strings {
@@ -866,6 +891,13 @@ const HU: Strings = Strings {
     cast_resume: "Folytatás",
     cast_stop: "Leállítás",
     cast_close: "Bezárás",
+    set_cast_section: "Chromecast / Android TV Cast mód",
+    set_cast_mode_label: "Átviteli mód",
+    set_cast_mode_relay: "Helyi Proxy / FFmpeg Relay (Minden oldalon működik; bezáráskor leáll)",
+    set_cast_mode_direct: "Közvetlen link / Önálló TV-lejátszás (Mint telefonon; bezárás után is megy)",
+    set_cast_mode_note: "Megjegyzés: Közvetlen link módban a TV közvetlenül a külső linket nyitja meg, így a program bezárása után is szól tovább. Védett vagy külön sávos HD oldalaknál (pl. YouTube 1080p) a Helyi Relay mód megbízhatóbb.",
+    cast_mode_badge_relay: "Relay",
+    cast_mode_badge_direct: "Közvetlen",
 };
 
 pub fn strings(lang: AppLanguage) -> &'static Strings {

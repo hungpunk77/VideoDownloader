@@ -74,6 +74,8 @@ pub struct AppSettings {
     pub font_size: f32,
     #[serde(default = "default_small_font_size")]
     pub small_font_size: f32,
+    #[serde(default)]
+    pub cast_mode: CastMode,
 }
 
 fn default_cookie_browser() -> String {
@@ -299,6 +301,19 @@ pub enum CastPlayerStatus {
     Idle,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CastMode {
+    Relay,
+    Direct,
+}
+
+impl Default for CastMode {
+    fn default() -> Self {
+        Self::Relay
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CastSessionState {
     pub device: CastDevice,
@@ -306,6 +321,7 @@ pub struct CastSessionState {
     pub artist: String,
     pub thumbnail: Option<String>,
     pub status: CastPlayerStatus,
+    pub cast_mode: CastMode,
     pub is_audio: bool,
     pub current_time: f64,
     pub duration: Option<f64>,

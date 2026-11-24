@@ -28,7 +28,7 @@ fn main() -> eframe::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1240.0, 800.0])
         .with_min_inner_size([960.0, 640.0])
-        .with_decorations(false)
+        .with_decorations(cfg!(target_os = "windows"))
         .with_title(format!("VideoDownloader v{}", env!("CARGO_PKG_VERSION")))
         .with_app_id("videodownloader");
 

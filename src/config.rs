@@ -1,4 +1,4 @@
-use crate::types::{AppLanguage, AppSettings, ThemeMode};
+use crate::types::{AppLanguage, AppSettings, CastMode, ThemeMode};
 use std::fs;
 use std::path::PathBuf;
 
@@ -31,6 +31,7 @@ impl Default for AppSettings {
             include_id_in_filename: true,
             font_size: 14.0,
             small_font_size: 12.0,
+            cast_mode: CastMode::Relay,
         }
     }
 }
